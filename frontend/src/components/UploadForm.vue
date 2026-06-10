@@ -97,6 +97,30 @@ function addTags() {
   tagInput.value = ''
 }
 
+// Redimensionne une image à max 1920px côté client avant upload (skip GIF)
+function resizeImageFile(file, maxDim = 1920) {
+  if (file.type === 'image/gif') return Promise.resolve(file)
+  return new Promise((resolve) => {
+    const img = new Image()
+    const objectUrl = URL.createObjectURL(file)
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl)
+      const { naturalWidth: w, naturalHeight: h } = img
+      if (w <= maxDim && h <= maxDim) { resolve(file); return }
+      const ratio = Math.min(maxDim / w, maxDim / h)
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(w * ratio)
+      canvas.height = Math.round(h * ratio)
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
+      canvas.toBlob(blob => {
+        resolve(new File([blob], file.name, { type: file.type, lastModified: file.lastModified }))
+      }, file.type, 0.88)
+    }
+    img.onerror = () => { URL.revokeObjectURL(objectUrl); resolve(file) }
+    img.src = objectUrl
+  })
+}
+
 async function submit() {
   if (!files.value.length) return
   addTags()
@@ -105,8 +129,9 @@ async function submit() {
   doneCount.value = 0
 
   try {
+    const resized = await Promise.all(files.value.map(f => resizeImageFile(f)))
     const formData = new FormData()
-    for (const f of files.value) formData.append('images', f)
+    for (const f of resized) formData.append('images', f)
     formData.append('tags', JSON.stringify(tags.value))
     formData.append('emotions', JSON.stringify(selectedEmotions.value))
 

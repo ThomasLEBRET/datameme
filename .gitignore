@@ -1,0 +1,29 @@
+# Dépendances
+node_modules/
+frontend/node_modules/
+worker/node_modules/
+
+# Build
+frontend/dist/
+frontend/.vite/
+worker/dist/
+
+# Lock files (décommente si tu veux les versionner)
+# package-lock.json
+# yarn.lock
+frontend/package-lock.json
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+.dev.vars
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Éditeurs
+.vscode/
+.idea/
+*.swp

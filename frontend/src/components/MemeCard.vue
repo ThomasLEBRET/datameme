@@ -105,10 +105,15 @@ async function copyMeme() {
     await copyImageToClipboard(props.meme.url)
     copyState.value = 'ok'
     emit('copied')
-  } catch {
-    copyState.value = 'fail'
-  } finally {
     setTimeout(() => { copyState.value = 'idle' }, 2000)
+  } catch (e) {
+    // AbortError = l'utilisateur a fermé le share sheet → retour silencieux
+    if (e?.name === 'AbortError') {
+      copyState.value = 'idle'
+    } else {
+      copyState.value = 'fail'
+      setTimeout(() => { copyState.value = 'idle' }, 2000)
+    }
   }
 }
 
