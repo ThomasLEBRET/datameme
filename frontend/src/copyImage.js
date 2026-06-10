@@ -38,7 +38,7 @@ export async function copyImageToClipboard(imageUrl) {
   if (navigator.clipboard?.write) {
     try {
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })])
-      return
+      return 'copied'
     } catch {
       // Pas de clipboard write → essai Web Share
     }
@@ -46,13 +46,20 @@ export async function copyImageToClipboard(imageUrl) {
 
   // Essai 2 : Web Share API avec fichier (iOS Safari, Android Chrome)
   if (navigator.canShare) {
-    const filename = key.replace(/\.[^.]+$/, '.png')
-    const file = new File([pngBlob], filename, { type: 'image/png' })
-    if (navigator.canShare({ files: [file] })) {
-      await navigator.share({ files: [file], title: 'Mème' })
-      return
+    const shareFilename = key.replace(/\.[^.]+$/, '.png')
+    const shareFile = new File([pngBlob], shareFilename, { type: 'image/png' })
+    if (navigator.canShare({ files: [shareFile] })) {
+      await navigator.share({ files: [shareFile], title: 'Mème' })
+      return 'shared'
     }
   }
 
-  throw new Error('Copie non supportée sur ce navigateur')
+  // Fallback final : téléchargement (Firefox mobile, navigateurs anciens)
+  const dlUrl = URL.createObjectURL(pngBlob)
+  const a = document.createElement('a')
+  a.href = dlUrl
+  a.download = key.replace(/\.[^.]+$/, '.png')
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(dlUrl), 1000)
+  return 'downloaded'
 }

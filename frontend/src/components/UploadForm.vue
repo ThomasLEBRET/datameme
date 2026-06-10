@@ -20,6 +20,7 @@
     <div v-if="files.length" class="file-list">
       <div v-for="(f, i) in files" :key="i" class="file-item">
         <span class="file-name">{{ f.name }}</span>
+        <span class="file-size">{{ formatSize(f.size) }}</span>
         <button class="file-remove" @click="files.splice(i, 1)" aria-label="Retirer">×</button>
       </div>
     </div>
@@ -80,6 +81,12 @@ const loading = ref(false)
 const dragging = ref(false)
 const doneCount = ref(0)
 
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' o'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' Ko'
+  return (bytes / (1024 * 1024)).toFixed(1) + ' Mo'
+}
+
 function onFileChange(e) {
   files.value = [...files.value, ...Array.from(e.target.files)]
   e.target.value = ''
@@ -129,7 +136,7 @@ async function submit() {
   doneCount.value = 0
 
   try {
-    const resized = await Promise.all(files.value.map(f => resizeImageFile(f)))
+    const resized = await Promise.all(files.value.map(f => resizeImageFile(f, 1200)))
     const formData = new FormData()
     for (const f of resized) formData.append('images', f)
     formData.append('tags', JSON.stringify(tags.value))
@@ -178,7 +185,8 @@ async function submit() {
   border-radius: 6px;
   padding: 4px 10px;
 }
-.file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.file-size { font-size: 11px; color: var(--text-muted); white-space: nowrap; margin-left: 6px; }
 .file-remove { background: none; border: none; color: var(--text-muted); font-size: 16px; line-height: 1; padding: 0 0 0 8px; }
 
 .field { margin-bottom: 14px; }

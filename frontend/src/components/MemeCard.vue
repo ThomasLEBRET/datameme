@@ -30,7 +30,7 @@
       <span class="date">{{ formatDate(meme.created_at) }}</span>
       <button
         class="copy-btn"
-        :class="{ success: copyState === 'ok', fail: copyState === 'fail' }"
+        :class="{ success: copyState === 'ok' || copyState === 'downloaded', fail: copyState === 'fail' }"
         @click.stop="copyMeme"
         :disabled="copyState !== 'idle'"
         :aria-label="copyLabel"
@@ -86,7 +86,8 @@ let longPressTimer = null
 const copyLabel = computed(() => {
   if (copyState.value === 'copying') return 'Copie…'
   if (copyState.value === 'ok') return 'Copié !'
-  if (copyState.value === 'fail') return 'Non supporté'
+  if (copyState.value === 'downloaded') return 'Téléchargé !'
+  if (copyState.value === 'fail') return 'Erreur'
   return 'Copier'
 })
 
@@ -102,12 +103,11 @@ function onImgError(e) {
 async function copyMeme() {
   copyState.value = 'copying'
   try {
-    await copyImageToClipboard(props.meme.url)
-    copyState.value = 'ok'
+    const result = await copyImageToClipboard(props.meme.url)
+    copyState.value = result === 'downloaded' ? 'downloaded' : 'ok'
     emit('copied')
     setTimeout(() => { copyState.value = 'idle' }, 2000)
   } catch (e) {
-    // AbortError = l'utilisateur a fermé le share sheet → retour silencieux
     if (e?.name === 'AbortError') {
       copyState.value = 'idle'
     } else {
