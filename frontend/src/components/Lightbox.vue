@@ -40,6 +40,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
+import { copyImageToClipboard } from '../copyImage.js'
 
 const props = defineProps({ meme: Object })
 const emit = defineEmits(['close'])
@@ -49,15 +50,7 @@ const copyState = ref('idle')
 async function copyMeme() {
   copyState.value = 'copying'
   try {
-    const res = await fetch(props.meme.url)
-    const blob = await res.blob()
-    const bmp = await createImageBitmap(blob)
-    const canvas = document.createElement('canvas')
-    canvas.width = bmp.width
-    canvas.height = bmp.height
-    canvas.getContext('2d').drawImage(bmp, 0, 0)
-    const pngBlob = await new Promise(r => canvas.toBlob(r, 'image/png'))
-    await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })])
+    await copyImageToClipboard(props.meme.url)
     copyState.value = 'ok'
   } catch {
     copyState.value = 'fail'

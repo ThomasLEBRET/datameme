@@ -1,9 +1,9 @@
 // Point d'entrée du Worker DataMeme
-// Routage des requêtes vers les handlers appropriés
 
 import { handleAuth } from './auth.js';
 import { handleMemes } from './memes.js';
 import { handleEmotions } from './emotions.js';
+import { handleProxy } from './proxy.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -27,15 +27,10 @@ export default {
       });
 
     try {
-      if (path.startsWith('/api/auth')) {
-        return await handleAuth(request, env, json, path);
-      }
-      if (path.startsWith('/api/memes')) {
-        return await handleMemes(request, env, json, path, ctx);
-      }
-      if (path.startsWith('/api/emotions')) {
-        return await handleEmotions(request, env, json, path);
-      }
+      if (path.startsWith('/api/auth')) return await handleAuth(request, env, json, path);
+      if (path.startsWith('/api/memes')) return await handleMemes(request, env, json, path, ctx);
+      if (path.startsWith('/api/emotions')) return await handleEmotions(request, env, json, path);
+      if (path.startsWith('/api/proxy')) return await handleProxy(request, env, corsHeaders, path);
       return json({ error: 'Route introuvable' }, 404);
     } catch (err) {
       console.error('Erreur Worker :', err);

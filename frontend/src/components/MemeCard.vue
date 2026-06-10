@@ -68,6 +68,7 @@
 
 <script setup>
 import { ref, computed } from 'vue'
+import { copyImageToClipboard } from '../copyImage.js'
 
 const props = defineProps({
   meme: Object,
@@ -101,25 +102,7 @@ function onImgError(e) {
 async function copyMeme() {
   copyState.value = 'copying'
   try {
-    const res = await fetch(props.meme.url)
-    const blob = await res.blob()
-
-    // Tenter avec image/png si le type n'est pas supporté par ClipboardItem
-    const type = blob.type === 'image/jpeg' ? 'image/png' : blob.type
-
-    if (type === 'image/png') {
-      // Convertir en PNG via canvas pour maximiser la compatibilité
-      const bmp = await createImageBitmap(blob)
-      const canvas = document.createElement('canvas')
-      canvas.width = bmp.width
-      canvas.height = bmp.height
-      canvas.getContext('2d').drawImage(bmp, 0, 0)
-      const pngBlob = await new Promise(r => canvas.toBlob(r, 'image/png'))
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })])
-    } else {
-      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
-    }
-
+    await copyImageToClipboard(props.meme.url)
     copyState.value = 'ok'
     emit('copied')
   } catch {
