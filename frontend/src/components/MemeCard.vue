@@ -12,24 +12,34 @@
       <span v-for="em in meme.emotions" :key="em" class="tag emotion">{{ em }}</span>
     </div>
 
-    <!-- Image -->
-    <div class="img-wrap">
+    <!-- Image — clic = lightbox -->
+    <div class="img-wrap" @click="emit('lightbox', meme)">
       <img
         :src="meme.url"
         :alt="meme.filename"
         loading="lazy"
         @error="onImgError"
       />
+      <div class="img-overlay" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
+      </div>
     </div>
 
     <!-- Footer -->
     <div class="footer">
       <span class="date">{{ formatDate(meme.created_at) }}</span>
-      <button class="copy-btn" @click.stop="copyMeme" :disabled="copying">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-        </svg>
-        {{ copying ? 'Copié !' : 'Copier' }}
+      <button
+        class="copy-btn"
+        :class="{ success: copyState === 'ok', fail: copyState === 'fail' }"
+        @click.stop="copyMeme"
+        :disabled="copyState !== 'idle'"
+        :aria-label="copyLabel"
+      >
+        <!-- Icône selon l'état -->
+        <svg v-if="copyState === 'idle'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        <svg v-else-if="copyState === 'ok'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+        <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        {{ copyLabel }}
       </button>
     </div>
 
@@ -51,31 +61,37 @@
     </div>
   </div>
 
-  <!-- Overlay pour fermer le menu contextuel -->
   <teleport to="body">
     <div v-if="ctxVisible" class="ctx-overlay" @click="ctxVisible = false" @contextmenu.prevent="ctxVisible = false"></div>
   </teleport>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 
 const props = defineProps({
   meme: Object,
   isAdmin: Boolean,
 })
-const emit = defineEmits(['delete', 'edit', 'copied'])
+const emit = defineEmits(['delete', 'edit', 'copied', 'lightbox'])
 
-const copying = ref(false)
+// États : 'idle' | 'copying' | 'ok' | 'fail'
+const copyState = ref('idle')
 const ctxVisible = ref(false)
 const ctxX = ref(0)
 const ctxY = ref(0)
 let longPressTimer = null
 
+const copyLabel = computed(() => {
+  if (copyState.value === 'copying') return 'Copie…'
+  if (copyState.value === 'ok') return 'Copié !'
+  if (copyState.value === 'fail') return 'Non supporté'
+  return 'Copier'
+})
+
 function formatDate(dt) {
   if (!dt) return ''
-  const d = new Date(dt)
-  return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })
+  return new Date(dt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })
 }
 
 function onImgError(e) {
@@ -83,66 +99,62 @@ function onImgError(e) {
 }
 
 async function copyMeme() {
-  copying.value = true
+  copyState.value = 'copying'
   try {
     const res = await fetch(props.meme.url)
     const blob = await res.blob()
-    await navigator.clipboard.write([
-      new ClipboardItem({ [blob.type]: blob })
-    ])
+
+    // Tenter avec image/png si le type n'est pas supporté par ClipboardItem
+    const type = blob.type === 'image/jpeg' ? 'image/png' : blob.type
+
+    if (type === 'image/png') {
+      // Convertir en PNG via canvas pour maximiser la compatibilité
+      const bmp = await createImageBitmap(blob)
+      const canvas = document.createElement('canvas')
+      canvas.width = bmp.width
+      canvas.height = bmp.height
+      canvas.getContext('2d').drawImage(bmp, 0, 0)
+      const pngBlob = await new Promise(r => canvas.toBlob(r, 'image/png'))
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })])
+    } else {
+      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
+    }
+
+    copyState.value = 'ok'
     emit('copied')
   } catch {
-    // Fallback — ouvrir l'image dans un nouvel onglet
-    window.open(props.meme.url, '_blank')
+    copyState.value = 'fail'
   } finally {
-    setTimeout(() => { copying.value = false }, 1500)
+    setTimeout(() => { copyState.value = 'idle' }, 2000)
   }
 }
 
 function showCtxAt(x, y) {
   if (!props.isAdmin) return
-  // Évite que le menu sorte de l'écran
   ctxX.value = Math.min(x, window.innerWidth - 170)
   ctxY.value = Math.min(y, window.innerHeight - 90)
   ctxVisible.value = true
 }
 
-function onRightClick(e) {
-  showCtxAt(e.clientX, e.clientY)
-}
+function onRightClick(e) { showCtxAt(e.clientX, e.clientY) }
 
 function onTouchStart(e) {
   if (!props.isAdmin) return
   const touch = e.touches[0]
-  longPressTimer = setTimeout(() => {
-    showCtxAt(touch.clientX, touch.clientY)
-  }, 600)
+  longPressTimer = setTimeout(() => showCtxAt(touch.clientX, touch.clientY), 600)
 }
+function onTouchEnd() { clearTimeout(longPressTimer) }
+function cancelLongPress() { clearTimeout(longPressTimer) }
 
-function onTouchEnd() {
-  clearTimeout(longPressTimer)
-}
-
-function cancelLongPress() {
-  clearTimeout(longPressTimer)
-}
-
-function onEditClick() {
-  ctxVisible.value = false
-  emit('edit', props.meme)
-}
-
-function onDeleteClick() {
-  ctxVisible.value = false
-  emit('delete', props.meme.id)
-}
+function onEditClick() { ctxVisible.value = false; emit('edit', props.meme) }
+function onDeleteClick() { ctxVisible.value = false; emit('delete', props.meme.id) }
 </script>
 
 <style scoped>
 .card {
   background: var(--bg-surface);
   border: 0.5px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   overflow: visible;
   position: relative;
   transition: border-color 0.15s;
@@ -151,21 +163,25 @@ function onDeleteClick() {
 .card:hover { border-color: var(--border-hover); }
 
 .tags {
-  padding: 10px 10px 8px;
+  padding: 7px 8px 6px;
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
-  min-height: 36px;
+  gap: 4px;
+  min-height: 30px;
   overflow: hidden;
-  border-radius: 12px 12px 0 0;
+  border-radius: 10px 10px 0 0;
 }
 .tag {
-  font-size: 11px;
-  padding: 2px 8px;
+  font-size: 10px;
+  padding: 1px 6px;
   border-radius: 100px;
   background: var(--purple-bg);
   color: var(--purple-light);
   border: 0.5px solid var(--purple-border);
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .tag.emotion {
   background: var(--green-bg);
@@ -175,6 +191,8 @@ function onDeleteClick() {
 
 .img-wrap {
   overflow: hidden;
+  position: relative;
+  cursor: pointer;
 }
 .img-wrap img {
   width: 100%;
@@ -182,35 +200,53 @@ function onDeleteClick() {
   object-fit: cover;
   display: block;
   background: var(--bg-elevated);
-  transition: opacity 0.2s;
+}
+.img-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+.img-wrap:hover .img-overlay {
+  opacity: 1;
+  background: rgba(0,0,0,0.3);
 }
 
 .footer {
-  padding: 8px 10px;
+  padding: 6px 8px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 4px;
 }
 .date {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-muted);
+  white-space: nowrap;
 }
 .copy-btn {
   display: flex;
   align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  padding: 5px 10px;
-  border-radius: 6px;
+  gap: 4px;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 5px;
   border: 0.5px solid var(--border-hover);
   background: transparent;
   color: var(--text-secondary);
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  white-space: nowrap;
 }
-.copy-btn:hover { background: rgba(255,255,255,0.06); color: var(--text-primary); }
-.copy-btn:disabled { opacity: 0.7; }
+.copy-btn:hover:not(:disabled) { background: rgba(255,255,255,0.06); color: var(--text-primary); }
+.copy-btn.success { color: var(--green-light); border-color: var(--green-border); }
+.copy-btn.fail { color: var(--red-light); border-color: rgba(224,75,74,0.3); }
+.copy-btn:disabled { cursor: default; }
 
-/* Menu contextuel — positionné en fixed pour sortir du overflow:hidden */
 .ctx-menu {
   position: fixed;
   background: var(--bg-surface);
@@ -233,7 +269,6 @@ function onDeleteClick() {
   background: transparent;
   color: var(--text-secondary);
   text-align: left;
-  transition: background 0.15s;
 }
 .ctx-item:hover { background: rgba(255,255,255,0.06); color: var(--text-primary); }
 .ctx-item.danger { color: var(--red-light); }
