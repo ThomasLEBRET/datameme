@@ -1,0 +1,19 @@
+name = "datameme-worker"
+main = "worker/index.js"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "datameme-storage"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "datameme-db"
+database_id = "803cf0fe-3850-47f5-890e-8cdfca4d9fee"
+
+[ai]
+binding = "AI"
+
+[vars]
+ENVIRONMENT = "production"

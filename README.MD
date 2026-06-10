@@ -80,7 +80,7 @@ datameme/
 
 ```bash
 # 1. Cloner le repository
-git clone https://github.com/<user>/datameme.git
+git clone https://github.com/ThomasLEBRET/datameme.git
 cd datameme
 npm install
 
