@@ -49,12 +49,30 @@ function tagsFromText(text) {
   return [...new Set(words)].slice(0, 8);
 }
 
+async function purgeCache(key) {
+  try {
+    const url = `${WORKER_BASE}/api/proxy/${key}`;
+    await caches.default.delete(new Request(url));
+  } catch {}
+}
+
 // Clé R2 d'un mème — depuis l'URL stockée (toujours fidèle), sinon reconstruite depuis le filename
 function r2KeyOf(meme) {
   const fromUrl = meme.url?.split('/').pop();
   if (fromUrl) return fromUrl;
   const ext = meme.filename?.split('.').pop()?.toLowerCase() || 'jpg';
   return `${meme.id}.${ext}`;
+}
+
+const WORKER_BASE = 'https://datameme-worker.th-lebret.workers.dev';
+const R2_PUBLIC_RE = /^https:\/\/pub-[a-f0-9]+\.r2\.dev\//;
+
+// Remplace l'URL r2.dev par le proxy worker — les images passent par le cache Cloudflare
+function proxyUrl(url) {
+  if (!url) return url;
+  const key = url.split('/').pop();
+  if (R2_PUBLIC_RE.test(url)) return `${WORKER_BASE}/api/proxy/${key}`;
+  return url;
 }
 
 export async function handleMemes(request, env, json, path, ctx) {
@@ -127,6 +145,7 @@ export async function handleMemes(request, env, json, path, ctx) {
 
     const memes = results.map(m => ({
       ...m,
+      url: proxyUrl(m.url),
       tags: JSON.parse(m.tags || '[]'),
       emotions: JSON.parse(m.emotions || '[]'),
     }));
@@ -233,12 +252,12 @@ export async function handleMemes(request, env, json, path, ctx) {
       'SELECT id, filename, url FROM memes'
     ).all();
 
-    // Supprimer tous les objets R2
     for (const meme of results) {
-      try { await env.R2.delete(r2KeyOf(meme)); } catch {}
+      const key = r2KeyOf(meme);
+      try { await env.R2.delete(key); } catch {}
+      await purgeCache(key);
     }
 
-    // Vider la table
     await env.DB.prepare('DELETE FROM memes').run();
 
     return json({ deleted: results.length });
@@ -279,7 +298,9 @@ export async function handleMemes(request, env, json, path, ctx) {
 
     if (!meme) return json({ error: 'Mème introuvable' }, 404);
 
-    await env.R2.delete(r2KeyOf(meme));
+    const key = r2KeyOf(meme);
+    await env.R2.delete(key);
+    await purgeCache(key);
     await env.DB.prepare('DELETE FROM memes WHERE id = ?').bind(id).run();
 
     return json({ success: true });

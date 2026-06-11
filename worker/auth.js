@@ -1,10 +1,36 @@
 // Authentification admin — JWT signé HMAC-SHA256, mots de passe PBKDF2 salés
 
-// Durée de vie du token — 7 jours pour permettre la connexion persistante côté client
 const TOKEN_TTL = 7 * 24 * 3600;
-
-// Itérations PBKDF2 — natif (crypto.subtle), contraint par le budget CPU des Workers (~10 ms en plan gratuit)
 const PBKDF2_ITERATIONS = 10000;
+
+// Rate limiting login : 5 tentatives / 10 min par IP, stocké en D1
+const RATE_LIMIT_MAX = 5;
+const RATE_LIMIT_WINDOW = 600; // secondes
+
+async function checkRateLimit(env, ip) {
+  const key = `rl:${ip}`;
+  const now = Math.floor(Date.now() / 1000);
+  const row = await env.DB.prepare(
+    'SELECT attempts, reset_at FROM login_attempts WHERE key = ?'
+  ).bind(key).first();
+
+  if (row && now < row.reset_at) {
+    if (row.attempts >= RATE_LIMIT_MAX) return false;
+    await env.DB.prepare(
+      'UPDATE login_attempts SET attempts = attempts + 1 WHERE key = ?'
+    ).bind(key).run();
+  } else {
+    await env.DB.prepare(
+      'INSERT OR REPLACE INTO login_attempts (key, attempts, reset_at) VALUES (?, 1, ?)'
+    ).bind(key, now + RATE_LIMIT_WINDOW).run();
+  }
+  return true;
+}
+
+async function resetRateLimit(env, ip) {
+  await env.DB.prepare('DELETE FROM login_attempts WHERE key = ?')
+    .bind(`rl:${ip}`).run();
+}
 
 function toHex(buf) {
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -113,6 +139,11 @@ export async function handleAuth(request, env, json, path) {
 
   // POST /api/auth/login — connexion admin
   if (path === '/api/auth/login' && method === 'POST') {
+    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+    if (!(await checkRateLimit(env, ip))) {
+      return json({ error: 'Trop de tentatives, réessaie dans 10 minutes' }, 429);
+    }
+
     const { username, password } = await request.json();
 
     if (!username || !password) {
@@ -131,6 +162,8 @@ export async function handleAuth(request, env, json, path) {
       await new Promise(r => setTimeout(r, 400));
       return json({ error: 'Identifiants incorrects' }, 401);
     }
+
+    await resetRateLimit(env, ip);
 
     // Migration transparente de l'ancien hash SHA-256 vers PBKDF2 au premier login réussi
     if (!admin.password_hash.startsWith('pbkdf2$')) {
