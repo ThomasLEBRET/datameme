@@ -1,7 +1,7 @@
 // Endpoints mèmes — liste, upload, mise à jour des tags, suppression
 
 import { requireAuth } from './auth.js';
-import { runOCR, runKeywords, runClassification } from './ai.js';
+import { runOCR, runDescription } from './ai.js';
 
 function uuid() {
   return crypto.randomUUID();
@@ -127,11 +127,11 @@ export async function handleMemes(request, env, json, path, ctx) {
       const term = `%${search}%`;
       query = `
         SELECT * FROM memes
-        WHERE tags LIKE ? OR emotions LIKE ?
+        WHERE tags LIKE ? OR emotions LIKE ? OR description LIKE ?
         ORDER BY created_at DESC
         LIMIT ? OFFSET ?
       `;
-      params = [term, term, limit, offset];
+      params = [term, term, term, limit, offset];
     } else {
       query = `
         SELECT * FROM memes
@@ -214,22 +214,22 @@ export async function handleMemes(request, env, json, path, ctx) {
       const url = `https://pub-a1770e0330114104863defe027dda98b.r2.dev/${key}`;
 
       // Tags automatiques : texte OCR → mots-clés vision → classification (dernier recours)
-      const { text: ocrText, hasText } = await runOCR(env, arrayBuffer);
+      const [{ text: ocrText, hasText }, description] = await Promise.all([
+        runOCR(env, arrayBuffer),
+        runDescription(env, arrayBuffer),
+      ]);
 
-      let autoTags = [];
-      if (hasText) autoTags = tagsFromText(ocrText);
-      if (!autoTags.length) autoTags = await runKeywords(env, arrayBuffer);
-      if (!autoTags.length) autoTags = await runClassification(env, arrayBuffer);
-
+      const autoTags = hasText ? tagsFromText(ocrText) : [];
       const allTags = [...new Set([...commonTags, ...autoTags])];
 
       await env.DB.prepare(`
-        INSERT INTO memes (id, url, filename, filesize, tags, emotions, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        INSERT INTO memes (id, url, filename, filesize, tags, emotions, description, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `).bind(
         id, url, file.name, filesize,
         JSON.stringify(allTags),
-        JSON.stringify(commonEmotions)
+        JSON.stringify(commonEmotions),
+        description
       ).run();
 
       uploaded.push({
@@ -261,6 +261,49 @@ export async function handleMemes(request, env, json, path, ctx) {
     await env.DB.prepare('DELETE FROM memes').run();
 
     return json({ deleted: results.length });
+  }
+
+  // POST /api/memes/redescribe — génère les descriptions manquantes sur les mèmes existants
+  // Endpoint one-shot à appeler depuis l'interface admin après la migration 004
+  if (path === '/api/memes/redescribe' && method === 'POST') {
+    const auth = await requireAuth(request, env);
+    if (!auth) return json({ error: 'Non autorisé' }, 401);
+
+    // Récupère uniquement les mèmes sans description (migration idempotente)
+    const { results } = await env.DB.prepare(
+      "SELECT id, url FROM memes WHERE description IS NULL OR description = '' ORDER BY created_at ASC"
+    ).all();
+
+    if (!results.length) return json({ processed: 0, message: 'Tous les mèmes ont déjà une description' });
+
+    let processed = 0;
+    let errors = 0;
+
+    for (const meme of results) {
+      try {
+        // Récupère l'image depuis R2 via la clé extraite de l'URL
+        const key = meme.url.split('/').pop();
+        const object = await env.R2.get(key);
+        if (!object) { errors++; continue; }
+
+        const arrayBuffer = await object.arrayBuffer();
+        const description = await runDescription(env, arrayBuffer);
+
+        if (description) {
+          await env.DB.prepare(
+            'UPDATE memes SET description = ? WHERE id = ?'
+          ).bind(description, meme.id).run();
+          processed++;
+        } else {
+          errors++;
+        }
+      } catch (err) {
+        console.error(`Erreur redescribe mème ${meme.id} :`, err);
+        errors++;
+      }
+    }
+
+    return json({ processed, errors, total: results.length });
   }
 
   // PATCH /api/memes/:id — mise à jour des tags et émotions

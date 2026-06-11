@@ -6,9 +6,6 @@ const OCR_MIN_CHARS = 4;
 // Modèle vision (OCR + description)
 const MODEL_VISION = '@cf/llava-hf/llava-1.5-7b-hf';
 
-// Modèle de classification d'images (dernier recours)
-const MODEL_CLASSIFICATION = '@cf/microsoft/resnet-50';
-
 // Nettoie la réponse du modèle : retire les phrases d'enrobage que LLaVA ajoute
 // autour du texte extrait ("The text in the image reads: …", etc.)
 function cleanOcrResponse(raw) {
@@ -48,44 +45,21 @@ export async function runOCR(env, imageBuffer) {
  * Demande au modèle vision des mots-clés descriptifs en français
  * Bien plus pertinent pour des mèmes que les classes ImageNet de resnet-50
  */
-export async function runKeywords(env, imageBuffer) {
+export async function runDescription(env, imageBuffer) {
   try {
     const result = await env.AI.run(MODEL_VISION, {
       image: [...new Uint8Array(imageBuffer)],
-      prompt: 'Describe this meme image with 3 to 5 short keywords in French, lowercase, separated by commas. Reply with the keywords only, no other text.',
-      max_tokens: 64,
+      prompt: `Tu es un expert en mèmes internet. Décris ce mème en une seule phrase dense en français :
+- Qui est le personnage ou sujet principal (nom si reconnu, sinon description)
+- Quelle est son expression ou action
+- Quel texte est visible s'il y en a
+- Quelle situation ou émotion ce mème représente typiquement
+Réponds uniquement avec la phrase, sans introduction.`,
+      max_tokens: 150,
     });
-
-    const raw = (result.response || '').toLowerCase().replace(/^[^:\n]{0,40}:\s*/, '');
-    return raw
-      .split(/[,\n]+/)
-      .map(k => k.trim().replace(/[^a-zà-ÿœç' -]/g, '').trim())
-      .filter(k => k.length >= 3 && k.length <= 30 && k.split(' ').length <= 3)
-      .slice(0, 5);
+    return (result.response || '').trim();
   } catch (err) {
-    console.error('Erreur keywords :', err);
-    return [];
-  }
-}
-
-/**
- * Classification visuelle resnet-50 — dernier recours si le modèle vision n'a rien donné
- * Labels ImageNet en anglais, seuil de confiance relevé pour limiter le bruit
- */
-export async function runClassification(env, imageBuffer) {
-  try {
-    const result = await env.AI.run(MODEL_CLASSIFICATION, {
-      image: [...new Uint8Array(imageBuffer)],
-    });
-
-    const tags = (result || [])
-      .filter(item => item.score > 0.3)
-      .slice(0, 3)
-      .map(item => item.label.toLowerCase().replace(/_/g, ' '));
-
-    return tags;
-  } catch (err) {
-    console.error('Erreur classification :', err);
-    return [];
+    console.error('Erreur description :', err);
+    return '';
   }
 }
