@@ -5,24 +5,30 @@
 }
 
 :root {
-  --bg-base: #111110;
-  --bg-surface: #1a1a18;
-  --bg-elevated: #222220;
-  --border: rgba(255, 255, 255, 0.08);
-  --border-hover: rgba(255, 255, 255, 0.18);
-  --text-primary: #e8e6e0;
-  --text-secondary: #b4b2a9;
-  --text-muted: #5F5E5A;
-  --purple: #534AB7;
-  --purple-light: #AFA9EC;
-  --purple-bg: rgba(127, 119, 221, 0.15);
-  --purple-border: rgba(127, 119, 221, 0.25);
-  --green: #1D9E75;
-  --green-light: #5DCAA5;
-  --green-bg: rgba(29, 158, 117, 0.15);
-  --green-border: rgba(29, 158, 117, 0.25);
+  --bg-base: #0d0d12;
+  --bg-surface: #15151c;
+  --bg-elevated: #1d1d26;
+  --border: rgba(255, 255, 255, 0.07);
+  --border-hover: rgba(255, 255, 255, 0.16);
+  --text-primary: #eceaf4;
+  --text-secondary: #b5b3c2;
+  --text-muted: #6a6875;
+  --purple: #6C5CE7;
+  --purple-light: #ABA1F7;
+  --purple-bg: rgba(124, 108, 240, 0.14);
+  --purple-border: rgba(124, 108, 240, 0.28);
+  --green: #18A47C;
+  --green-light: #5DD3AC;
+  --green-bg: rgba(24, 164, 124, 0.14);
+  --green-border: rgba(24, 164, 124, 0.28);
   --red-light: #F09595;
   --red-bg: rgba(224, 75, 74, 0.1);
+
+  /* Dégradé d'accent animé — les « couleurs qui changent » */
+  --grad-1: #8b7cf8;
+  --grad-2: #45c4b0;
+  --grad-3: #ef7bb0;
+  --gradient: linear-gradient(115deg, var(--grad-1), var(--grad-2), var(--grad-3), var(--grad-1));
 }
 
 html, body {
@@ -32,6 +38,55 @@ html, body {
   font-size: 15px;
   line-height: 1.5;
   min-height: 100vh;
+}
+
+/* Halos colorés en fond — dérive lente, transform uniquement (pas de repaint) */
+body::before, body::after {
+  content: '';
+  position: fixed;
+  z-index: -1;
+  width: 60vmax;
+  height: 60vmax;
+  border-radius: 50%;
+  pointer-events: none;
+  animation: blob-drift 30s ease-in-out infinite alternate;
+}
+body::before {
+  top: -25vmax;
+  left: -20vmax;
+  background: radial-gradient(circle, rgba(124, 108, 240, 0.16), transparent 65%);
+}
+body::after {
+  bottom: -28vmax;
+  right: -18vmax;
+  background: radial-gradient(circle, rgba(69, 196, 176, 0.13), transparent 65%);
+  animation-delay: -15s;
+}
+@keyframes blob-drift {
+  to { transform: translate(10vmax, 7vmax) scale(1.2) rotate(20deg); }
+}
+
+/* Texte en dégradé animé (logo, accents) */
+.gradient-text {
+  background: var(--gradient);
+  background-size: 300% 300%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: grad-shift 9s ease infinite;
+}
+@keyframes grad-shift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::before, body::after, .gradient-text { animation: none; }
+}
+
+::selection {
+  background: rgba(124, 108, 240, 0.35);
 }
 
 button {

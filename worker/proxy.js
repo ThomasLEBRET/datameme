@@ -9,6 +9,11 @@ export async function handleProxy(request, env, corsHeaders, path) {
 
   const key = keyMatch[1];
 
+  // Seules les clés générées par l'upload sont servies : <uuid>.<extension image>
+  if (!/^[\w-]+\.(jpe?g|png|gif|webp)$/i.test(key)) {
+    return new Response('Not found', { status: 404, headers: corsHeaders });
+  }
+
   const object = await env.R2.get(key);
   if (!object) {
     return new Response('Image introuvable', { status: 404, headers: corsHeaders });

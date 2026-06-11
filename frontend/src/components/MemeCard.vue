@@ -145,10 +145,14 @@ function onDeleteClick() { ctxVisible.value = false; emit('delete', props.meme.i
   border-radius: 10px;
   overflow: visible;
   position: relative;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, transform 0.18s, box-shadow 0.18s;
   user-select: none;
 }
-.card:hover { border-color: var(--border-hover); }
+.card:hover {
+  border-color: var(--purple-border);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(124, 108, 240, 0.12);
+}
 
 .tags {
   padding: 7px 8px 6px;

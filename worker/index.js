@@ -5,15 +5,31 @@ import { handleMemes } from './memes.js';
 import { handleEmotions } from './emotions.js';
 import { handleProxy } from './proxy.js';
 
+// Origines autorisées à appeler l'API depuis un navigateur
+const ALLOWED_ORIGINS = new Set([
+  'https://datameme.pages.dev',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+]);
+
+function resolveOrigin(origin) {
+  if (origin && ALLOWED_ORIGINS.has(origin)) return origin;
+  // Déploiements de prévisualisation Pages : https://<hash>.datameme.pages.dev
+  if (origin && /^https:\/\/[\w-]+\.datameme\.pages\.dev$/.test(origin)) return origin;
+  return 'https://datameme.pages.dev';
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
 
     const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': resolveOrigin(request.headers.get('Origin')),
       'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Max-Age': '86400',
+      'Vary': 'Origin',
     };
 
     if (request.method === 'OPTIONS') {

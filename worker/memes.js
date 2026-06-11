@@ -1,10 +1,60 @@
 // Endpoints mèmes — liste, upload, mise à jour des tags, suppression
 
 import { requireAuth } from './auth.js';
-import { runOCR, runClassification } from './ai.js';
+import { runOCR, runKeywords, runClassification } from './ai.js';
 
 function uuid() {
   return crypto.randomUUID();
+}
+
+// Types d'images acceptés à l'upload — l'extension stockée est dérivée du MIME, jamais du nom de fichier
+const ALLOWED_TYPES = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+};
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 Mo
+const MAX_FILES_PER_UPLOAD = 20;
+
+// Mots vides FR/EN exclus des tags générés depuis le texte OCR
+const STOPWORDS = new Set([
+  // français
+  'une', 'des', 'les', 'dans', 'pour', 'avec', 'sans', 'sur', 'sous', 'est', 'sont',
+  'être', 'avoir', 'fait', 'faire', 'faut', 'plus', 'moins', 'très', 'bien', 'mais',
+  'donc', 'alors', 'quand', 'comme', 'comment', 'pourquoi', 'parce', 'que', 'qui',
+  'quoi', 'cette', 'ceux', 'celle', 'tout', 'tous', 'toute', 'toutes', 'votre',
+  'notre', 'leur', 'leurs', 'vous', 'nous', 'elle', 'elles', 'ils', 'mon', 'ton',
+  'son', 'mes', 'tes', 'ses', 'aux', 'par', 'pas', 'peu', 'peut', 'cela', 'ceci',
+  'ici', 'avez', 'avons', 'ont', 'encore', 'jamais', 'toujours', 'rien', 'chose',
+  'quel', 'quelle', 'entre', 'avant', 'depuis', 'aussi', 'autre', 'chaque', 'même',
+  // anglais
+  'the', 'and', 'this', 'that', 'with', 'from', 'your', 'you', 'have', 'has',
+  'what', 'when', 'where', 'will', 'would', 'there', 'their', 'they', 'then',
+  'than', 'been', 'were', 'are', 'was', 'not', 'but', 'for', 'all', 'can',
+  'just', 'like', 'get', 'got', 'one', 'out', 'now', 'how', 'why', 'who',
+  'his', 'her', 'him', 'she', 'its', 'our',
+  // bruit fréquent des réponses du modèle vision
+  'image', 'text', 'meme', 'says', 'reads', 'written', 'caption', 'photo',
+  'picture', 'top', 'bottom',
+]);
+
+// Extrait des tags exploitables depuis le texte OCR : mots significatifs, dédupliqués
+function tagsFromText(text) {
+  const words = text
+    .toLowerCase()
+    .split(/[^a-zà-ÿœç0-9']+/i)
+    .map(w => w.replace(/^'+|'+$/g, ''))
+    .filter(w => w.length >= 3 && w.length <= 24 && !STOPWORDS.has(w) && !/^\d+$/.test(w));
+  return [...new Set(words)].slice(0, 8);
+}
+
+// Clé R2 d'un mème — depuis l'URL stockée (toujours fidèle), sinon reconstruite depuis le filename
+function r2KeyOf(meme) {
+  const fromUrl = meme.url?.split('/').pop();
+  if (fromUrl) return fromUrl;
+  const ext = meme.filename?.split('.').pop()?.toLowerCase() || 'jpg';
+  return `${meme.id}.${ext}`;
 }
 
 export async function handleMemes(request, env, json, path, ctx) {
@@ -21,7 +71,7 @@ export async function handleMemes(request, env, json, path, ctx) {
 
     // Récupérer tous les mèmes
     const { results } = await env.DB.prepare(
-      'SELECT id, filename, filesize FROM memes ORDER BY created_at ASC'
+      'SELECT id, filename, filesize, url FROM memes ORDER BY created_at ASC'
     ).all();
 
     const seen = new Map();
@@ -38,8 +88,7 @@ export async function handleMemes(request, env, json, path, ctx) {
 
     // Supprimer les doublons dans R2 et D1
     for (const meme of toDelete) {
-      const ext = meme.filename?.split('.').pop()?.toLowerCase() || 'jpg';
-      try { await env.R2.delete(`${meme.id}.${ext}`); } catch {}
+      try { await env.R2.delete(r2KeyOf(meme)); } catch {}
       await env.DB.prepare('DELETE FROM memes WHERE id = ?').bind(meme.id).run();
     }
 
@@ -92,18 +141,48 @@ export async function handleMemes(request, env, json, path, ctx) {
 
     const formData = await request.formData();
     const files = formData.getAll('images');
-    const commonTags = JSON.parse(formData.get('tags') || '[]');
-    const commonEmotions = JSON.parse(formData.get('emotions') || '[]');
+
+    let commonTags, commonEmotions;
+    try {
+      commonTags = JSON.parse(formData.get('tags') || '[]');
+      commonEmotions = JSON.parse(formData.get('emotions') || '[]');
+    } catch {
+      return json({ error: 'Champs tags/emotions invalides' }, 400);
+    }
+    if (!Array.isArray(commonTags) || !Array.isArray(commonEmotions)) {
+      return json({ error: 'Champs tags/emotions invalides' }, 400);
+    }
+    commonTags = commonTags
+      .filter(t => typeof t === 'string' && t.trim())
+      .map(t => t.trim().slice(0, 50))
+      .slice(0, 30);
+    commonEmotions = commonEmotions
+      .filter(e => typeof e === 'string' && e.trim())
+      .map(e => e.trim().slice(0, 50))
+      .slice(0, 30);
 
     if (!files.length) {
       return json({ error: 'Aucune image fournie' }, 400);
+    }
+    if (files.length > MAX_FILES_PER_UPLOAD) {
+      return json({ error: `Maximum ${MAX_FILES_PER_UPLOAD} images par envoi` }, 400);
+    }
+
+    // Validation de tout le lot avant le moindre upload
+    for (const file of files) {
+      if (!ALLOWED_TYPES[file.type]) {
+        return json({ error: `Type non supporté : ${file.name}` }, 415);
+      }
+      if (file.size > MAX_FILE_SIZE) {
+        return json({ error: `Fichier trop lourd (max 10 Mo) : ${file.name}` }, 413);
+      }
     }
 
     const uploaded = [];
 
     for (const file of files) {
       const id = uuid();
-      const ext = file.name.split('.').pop().toLowerCase();
+      const ext = ALLOWED_TYPES[file.type];
       const key = `${id}.${ext}`;
       const arrayBuffer = await file.arrayBuffer();
       const filesize = arrayBuffer.byteLength;
@@ -115,19 +194,13 @@ export async function handleMemes(request, env, json, path, ctx) {
 
       const url = `https://pub-a1770e0330114104863defe027dda98b.r2.dev/${key}`;
 
-      // OCR via Workers AI
+      // Tags automatiques : texte OCR → mots-clés vision → classification (dernier recours)
       const { text: ocrText, hasText } = await runOCR(env, arrayBuffer);
 
       let autoTags = [];
-      if (hasText) {
-        autoTags = ocrText
-          .toLowerCase()
-          .split(/\s+/)
-          .filter(w => w.length > 3)
-          .slice(0, 10);
-      } else {
-        autoTags = await runClassification(env, arrayBuffer);
-      }
+      if (hasText) autoTags = tagsFromText(ocrText);
+      if (!autoTags.length) autoTags = await runKeywords(env, arrayBuffer);
+      if (!autoTags.length) autoTags = await runClassification(env, arrayBuffer);
 
       const allTags = [...new Set([...commonTags, ...autoTags])];
 
@@ -157,13 +230,12 @@ export async function handleMemes(request, env, json, path, ctx) {
     if (!auth) return json({ error: 'Non autorisé' }, 401);
 
     const { results } = await env.DB.prepare(
-      'SELECT id, filename FROM memes'
+      'SELECT id, filename, url FROM memes'
     ).all();
 
     // Supprimer tous les objets R2
     for (const meme of results) {
-      const ext = meme.filename?.split('.').pop()?.toLowerCase() || 'jpg';
-      try { await env.R2.delete(`${meme.id}.${ext}`); } catch {}
+      try { await env.R2.delete(r2KeyOf(meme)); } catch {}
     }
 
     // Vider la table
@@ -202,13 +274,12 @@ export async function handleMemes(request, env, json, path, ctx) {
     if (!auth) return json({ error: 'Non autorisé' }, 401);
 
     const meme = await env.DB.prepare(
-      'SELECT id, filename FROM memes WHERE id = ?'
+      'SELECT id, filename, url FROM memes WHERE id = ?'
     ).bind(id).first();
 
     if (!meme) return json({ error: 'Mème introuvable' }, 404);
 
-    const ext = meme.filename?.split('.').pop()?.toLowerCase() || 'jpg';
-    await env.R2.delete(`${meme.id}.${ext}`);
+    await env.R2.delete(r2KeyOf(meme));
     await env.DB.prepare('DELETE FROM memes WHERE id = ?').bind(id).run();
 
     return json({ success: true });

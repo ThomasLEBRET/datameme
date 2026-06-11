@@ -1,7 +1,18 @@
-// Authentification admin — JWT signé, stocké en mémoire côté client uniquement
+// Authentification admin — JWT signé HMAC-SHA256, mots de passe PBKDF2 salés
+
+// Durée de vie du token — 7 jours pour permettre la connexion persistante côté client
+const TOKEN_TTL = 7 * 24 * 3600;
+
+// Itérations PBKDF2 — natif (crypto.subtle), contraint par le budget CPU des Workers (~10 ms en plan gratuit)
+const PBKDF2_ITERATIONS = 10000;
+
+function toHex(buf) {
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
 
 // Génère un JWT signé avec HMAC-SHA256
 async function signJWT(payload, secret) {
+  if (!secret) throw new Error('JWT_SECRET non configuré');
   const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const body = btoa(JSON.stringify(payload));
   const data = `${header}.${body}`;
@@ -19,30 +30,35 @@ async function signJWT(payload, secret) {
   return `${data}.${sig}`;
 }
 
-// Vérifie et décode un JWT
+// Vérifie et décode un JWT — retourne null pour tout token invalide ou malformé
 async function verifyJWT(token, secret) {
-  const parts = token.split('.');
-  if (parts.length !== 3) return null;
+  if (!secret) return null;
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
 
-  const [header, body, sig] = parts;
-  const data = `${header}.${body}`;
+    const [header, body, sig] = parts;
+    const data = `${header}.${body}`;
 
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['verify']
-  );
+    const key = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['verify']
+    );
 
-  const sigBytes = Uint8Array.from(atob(sig), c => c.charCodeAt(0));
-  const valid = await crypto.subtle.verify('HMAC', key, sigBytes, new TextEncoder().encode(data));
-  if (!valid) return null;
+    const sigBytes = Uint8Array.from(atob(sig), c => c.charCodeAt(0));
+    const valid = await crypto.subtle.verify('HMAC', key, sigBytes, new TextEncoder().encode(data));
+    if (!valid) return null;
 
-  const payload = JSON.parse(atob(body));
-  if (payload.exp && Date.now() / 1000 > payload.exp) return null;
+    const payload = JSON.parse(atob(body));
+    if (payload.exp && Date.now() / 1000 > payload.exp) return null;
 
-  return payload;
+    return payload;
+  } catch {
+    return null;
+  }
 }
 
 // Extrait et vérifie le JWT depuis l'en-tête Authorization
@@ -54,11 +70,42 @@ export async function requireAuth(request, env) {
   return await verifyJWT(token, env.JWT_SECRET);
 }
 
-// Hash d'un mot de passe via SHA-256 (bcrypt non disponible dans Workers)
-// Note : bcrypt est stocké dans D1 mais le hash comparé ici est SHA-256
+async function pbkdf2Hash(password, saltHex, iterations) {
+  const salt = Uint8Array.from(saltHex.match(/.{2}/g), h => parseInt(h, 16));
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    'PBKDF2',
+    false,
+    ['deriveBits']
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+    key,
+    256
+  );
+  return toHex(bits);
+}
+
+// Format stocké : pbkdf2$<itérations>$<sel hex>$<dérivé hex>
 async function hashPassword(password) {
+  const saltHex = toHex(crypto.getRandomValues(new Uint8Array(16)));
+  const dk = await pbkdf2Hash(password, saltHex, PBKDF2_ITERATIONS);
+  return `pbkdf2$${PBKDF2_ITERATIONS}$${saltHex}$${dk}`;
+}
+
+// Ancien format : SHA-256 non salé — conservé uniquement pour la migration transparente
+async function legacyHash(password) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(password));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  return toHex(buf);
+}
+
+async function verifyPassword(password, stored) {
+  if (stored.startsWith('pbkdf2$')) {
+    const [, iterations, salt, dk] = stored.split('$');
+    return (await pbkdf2Hash(password, salt, parseInt(iterations, 10))) === dk;
+  }
+  return (await legacyHash(password)) === stored;
 }
 
 export async function handleAuth(request, env, json, path) {
@@ -76,18 +123,23 @@ export async function handleAuth(request, env, json, path) {
       'SELECT * FROM admin WHERE username = ?'
     ).bind(username).first();
 
-    if (!admin) {
+    // Le hash est calculé même si l'utilisateur n'existe pas (anti-énumération par timing)
+    const valid = await verifyPassword(password, admin?.password_hash || 'deadbeef'.repeat(8));
+
+    if (!admin || !valid) {
+      // Délai sur échec : freine le brute force sans consommer de CPU
+      await new Promise(r => setTimeout(r, 400));
       return json({ error: 'Identifiants incorrects' }, 401);
     }
 
-    const hash = await hashPassword(password);
-    if (hash !== admin.password_hash) {
-      return json({ error: 'Identifiants incorrects' }, 401);
+    // Migration transparente de l'ancien hash SHA-256 vers PBKDF2 au premier login réussi
+    if (!admin.password_hash.startsWith('pbkdf2$')) {
+      await env.DB.prepare('UPDATE admin SET password_hash = ? WHERE id = ?')
+        .bind(await hashPassword(password), admin.id).run();
     }
 
-    // JWT valide 8 heures
     const token = await signJWT(
-      { sub: admin.id, username: admin.username, exp: Math.floor(Date.now() / 1000) + 28800 },
+      { sub: admin.id, username: admin.username, exp: Math.floor(Date.now() / 1000) + TOKEN_TTL },
       env.JWT_SECRET
     );
 
@@ -112,15 +164,13 @@ export async function handleAuth(request, env, json, path) {
       'SELECT * FROM admin WHERE id = ?'
     ).bind(auth.sub).first();
 
-    const currentHash = await hashPassword(currentPassword);
-    if (currentHash !== admin.password_hash) {
+    if (!admin || !(await verifyPassword(currentPassword, admin.password_hash))) {
       return json({ error: 'Mot de passe actuel incorrect' }, 401);
     }
 
-    const newHash = await hashPassword(newPassword);
     await env.DB.prepare(
       'UPDATE admin SET password_hash = ? WHERE id = ?'
-    ).bind(newHash, auth.sub).run();
+    ).bind(await hashPassword(newPassword), auth.sub).run();
 
     return json({ success: true });
   }

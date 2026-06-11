@@ -1,38 +1,73 @@
 // Client API — toutes les requêtes vers le Worker DataMeme
 
-const BASE_URL = 'https://datameme-worker.th-lebret.workers.dev'
+import { ref } from 'vue'
 
-let _token = null
+const BASE_URL = 'https://datameme-worker.th-lebret.workers.dev'
+const TOKEN_KEY = 'datameme_token'
+
+// Relit le token persisté et vérifie son expiration (champ exp du JWT)
+function readStoredToken() {
+  const t = localStorage.getItem(TOKEN_KEY)
+  if (!t) return null
+  try {
+    const payload = JSON.parse(atob(t.split('.')[1]))
+    if (payload.exp && Date.now() / 1000 > payload.exp) {
+      localStorage.removeItem(TOKEN_KEY)
+      return null
+    }
+    return t
+  } catch {
+    localStorage.removeItem(TOKEN_KEY)
+    return null
+  }
+}
+
+// Ref Vue : l'état de connexion est réactif dans les templates
+const _token = ref(readStoredToken())
+
 export const auth = {
-  setToken(t) { _token = t },
-  getToken() { return _token },
-  clear() { _token = null },
-  isLogged() { return !!_token },
+  setToken(t) {
+    _token.value = t
+    localStorage.setItem(TOKEN_KEY, t)
+  },
+  getToken() { return _token.value },
+  clear() {
+    _token.value = null
+    localStorage.removeItem(TOKEN_KEY)
+  },
+  isLogged() { return !!_token.value },
 }
 
 async function request(method, path, body = null) {
   const headers = { 'Content-Type': 'application/json' }
-  if (_token) headers['Authorization'] = `Bearer ${_token}`
+  if (_token.value) headers['Authorization'] = `Bearer ${_token.value}`
   const res = await fetch(`${BASE_URL}${path}`, {
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
   })
   const data = await res.json()
-  if (!res.ok) throw new Error(data.error || 'Erreur inconnue')
+  if (!res.ok) {
+    // Token expiré ou invalide → déconnexion (sauf routes auth où 401 = mauvais mot de passe)
+    if (res.status === 401 && _token.value && !path.startsWith('/api/auth')) auth.clear()
+    throw new Error(data.error || 'Erreur inconnue')
+  }
   return data
 }
 
 async function upload(formData) {
   const headers = {}
-  if (_token) headers['Authorization'] = `Bearer ${_token}`
+  if (_token.value) headers['Authorization'] = `Bearer ${_token.value}`
   const res = await fetch(`${BASE_URL}/api/memes`, {
     method: 'POST',
     headers,
     body: formData,
   })
   const data = await res.json()
-  if (!res.ok) throw new Error(data.error || 'Erreur upload')
+  if (!res.ok) {
+    if (res.status === 401 && _token.value) auth.clear()
+    throw new Error(data.error || 'Erreur upload')
+  }
   return data
 }
 

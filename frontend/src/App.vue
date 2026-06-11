@@ -2,7 +2,7 @@
   <div class="app">
     <!-- Barre de navigation -->
     <header class="topbar">
-      <div class="logo">data<span>meme</span></div>
+      <div class="logo">data<span class="gradient-text">meme</span></div>
       <div class="search-wrap">
         <svg class="search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
         <input
@@ -259,7 +259,9 @@ onUnmounted(() => {
 }
 
 .topbar {
-  background: var(--bg-surface);
+  background: rgba(21, 21, 28, 0.72);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
   border-bottom: 0.5px solid var(--border);
   padding: 0 12px;
   height: 48px;
@@ -272,12 +274,11 @@ onUnmounted(() => {
 }
 
 .logo {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 700;
   letter-spacing: -0.2px;
   white-space: nowrap;
 }
-.logo span { color: var(--purple-light); }
 
 .search-wrap {
   flex: 1;
@@ -408,8 +409,11 @@ onUnmounted(() => {
   bottom: 24px;
   left: 50%;
   transform: translateX(-50%) translateY(10px);
-  background: var(--green);
-  color: #E1F5EE;
+  background: var(--gradient);
+  background-size: 300% 300%;
+  animation: grad-shift 9s ease infinite;
+  color: #fff;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
   font-size: 13px;
   padding: 8px 16px;
   border-radius: 100px;
